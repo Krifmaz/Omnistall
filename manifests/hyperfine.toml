@@ -1,0 +1,47 @@
+# Example 3 — build-from-source project.
+# No prebuilt sources at all: the installer clones the repository, makes sure
+# a Rust toolchain exists (offering to install it with rustup), builds, and
+# installs the resulting binary.
+schema = 1
+
+[app]
+name = "hyperfine"
+display_name = "hyperfine"
+version = "1.19.0"
+description = "A command-line benchmarking tool."
+publisher = "David Peter (sharkdp)"
+homepage = "https://github.com/sharkdp/hyperfine"
+license = "MIT OR Apache-2.0"
+kind = "cli"
+
+[sources.any]
+type = "git"
+url = "https://github.com/sharkdp/hyperfine.git"
+rev = "v{version}"
+
+[build]
+toolchains = [
+  { name = "rust", version = ">=1.76" },
+  "git",
+]
+env = { CARGO_NET_GIT_FETCH_WITH_CLI = "true" }
+commands = ["cargo build --release --locked"]
+outputs = [{ path = "target/release/hyperfine", install_as = "bin/hyperfine" }]
+
+[build.windows]
+outputs = [{ path = "target/release/hyperfine.exe", install_as = "bin/hyperfine.exe" }]
+
+[build.linux]
+# Linux also needs a C compiler/linker for some crates.
+toolchains = [{ name = "rust", version = ">=1.76" }, "git", "cc"]
+
+[install]
+bin = ["bin/hyperfine"]
+add_to_path = true
+[install.windows]
+bin = ["bin/hyperfine.exe"]
+
+[hooks]
+post_install = ["\"$OMNISTALL_INSTALL_DIR/bin/hyperfine\" --version"]
+[hooks.windows]
+post_install = ["\"%OMNISTALL_INSTALL_DIR%\\bin\\hyperfine.exe\" --version"]

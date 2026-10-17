@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download</title>
+<meta name="description" content="Download the installer for your computer.">
+<link rel="icon" href="icon.png">
+<style>
+  :root { --bg:#ffffff; --fg:#1b1f24; --muted:#5b6470; --card:#f4f6f8; --line:#d9dee4; --accent:#2b6cf2; --accent-fg:#fff; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#0f1115; --fg:#e8ecf1; --muted:#9aa4b1; --card:#171a21; --line:#2a303a; --accent:#5b8dff; --accent-fg:#0b1020; } }
+  :root[data-theme="dark"] { --bg:#0f1115; --fg:#e8ecf1; --muted:#9aa4b1; --card:#171a21; --line:#2a303a; --accent:#5b8dff; --accent-fg:#0b1020; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font: 17px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 16px 64px; }
+  header { display:flex; align-items:center; gap:16px; margin-bottom: 24px; }
+  header img { width:64px; height:64px; border-radius:14px; }
+  h1 { font-size: 2rem; margin:0; }
+  .sub { color: var(--muted); margin: 4px 0 0; }
+  .cta { display:inline-block; margin: 24px 0 8px; padding: 18px 36px; font-size: 1.25rem; font-weight: 600; border-radius: 12px; background: var(--accent); color: var(--accent-fg); text-decoration:none; }
+  .cta:focus-visible, a:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  .meta { color: var(--muted); font-size: .95rem; }
+  .card { background: var(--card); border:1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-top: 24px; }
+  .card h2 { font-size: 1.05rem; margin: 0 0 10px; }
+  ul { padding-left: 1.2em; margin: 0; }
+  li { margin: 6px 0; }
+  details summary { cursor:pointer; font-weight:600; }
+  code { background: var(--card); border:1px solid var(--line); border-radius:6px; padding: 1px 6px; font-size:.95em; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.png" alt="">
+    <div>
+      <h1 id="title">Download</h1>
+      <p class="sub" id="subtitle">Detecting your computer…</p>
+    </div>
+  </header>
+
+  <a class="cta" id="download" href="https://github.com/__REPO__/releases/latest">Download</a>
+  <p class="meta" id="filemeta"></p>
+
+  <div class="card" id="howto">
+    <h2>After downloading</h2>
+    <div id="howto-windows" class="hidden">
+      <ul>
+        <li>Double-click the <code>.exe</code>. The installer opens; press <strong>Install</strong>.</li>
+        <li>If Windows shows “Windows protected your PC”, choose <em>More info → Run anyway</em>. This appears for new, not-yet-widely-downloaded programs.</li>
+      </ul>
+    </div>
+    <div id="howto-macos" class="hidden">
+      <ul>
+        <li>Open the <code>.dmg</code>, then double-click the installer inside it (no need to drag anything).</li>
+        <li>If macOS says the app “cannot be opened”, right-click (or Control-click) it and choose <em>Open</em>, then <em>Open</em> again. This is only needed the first time.</li>
+      </ul>
+    </div>
+    <div id="howto-linux" class="hidden">
+      <ul>
+        <li><strong>AppImage:</strong> make it executable (right-click → Properties → “Allow executing”, or <code>chmod +x</code>), then double-click.</li>
+        <li><strong>Debian / Ubuntu:</strong> download the <code>.deb</code> instead and double-click it to install with your software center.</li>
+      </ul>
+    </div>
+  </div>
+
+  <details class="card">
+    <summary>Other downloads</summary>
+    <ul id="all"></ul>
+    <p class="meta">Checksums: <a id="sums" href="#">SHA256SUMS</a> · <a id="releases" href="https://github.com/__REPO__/releases">All releases</a></p>
+  </details>
+</main>
+
+<script>
+(async function () {
+  const REPO = "__REPO__";
+  const $ = (id) => document.getElementById(id);
+
+  // ---- Detect OS and CPU ----------------------------------------------------
+  const ua = navigator.userAgent;
+  let os = /Windows/i.test(ua) ? "windows" : /Mac OS X|Macintosh/i.test(ua) ? "macos" : /Linux|X11/i.test(ua) && !/Android/i.test(ua) ? "linux" : "unknown";
+  let arch = "x86_64";
+  if (/aarch64|arm64|armv8/i.test(ua)) arch = "arm64";
+  try {
+    if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+      const v = await navigator.userAgentData.getHighEntropyValues(["architecture", "bitness", "platform"]);
+      if (v.platform) {
+        const p = v.platform.toLowerCase();
+        os = p.includes("win") ? "windows" : p.includes("mac") ? "macos" : p.includes("linux") ? "linux" : os;
+      }
+      if (v.architecture === "arm") arch = "arm64";
+      if (v.architecture === "x86") arch = "x86_64";
+    }
+  } catch (_) { /* older browsers */ }
+  // Safari on Apple Silicon reports an Intel UA; the universal .dmg covers both.
+
+  const names = { windows: "Windows", macos: "macOS", linux: "Linux", unknown: "your computer" };
+  $("subtitle").textContent = os === "unknown" ? "Choose a download below." : `For ${names[os]}${os !== "macos" ? " (" + (arch === "arm64" ? "ARM64" : "64-bit") + ")" : ""}`;
+
+  // ---- Pick the matching asset ----------------------------------------------
+  const prefer = {
+    windows: [`OmnistallSetup-windows-${arch}.exe`],
+    macos:   ["Omnistall-macos-universal.dmg"],
+    linux:   [`Omnistall-linux-${arch === "arm64" ? "aarch64" : "x86_64"}.AppImage`],
+    unknown: [],
+  }[os];
+  const isDebian = os === "linux" && /Ubuntu|Debian|Mint/i.test(ua);
+
+  try {
+    const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } });
+    if (!r.ok) throw new Error(r.status);
+    const rel = await r.json();
+    const assets = rel.assets || [];
+    const list = $("all");
+    for (const a of assets) {
+      const li = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = a.browser_download_url; link.textContent = a.name;
+      li.appendChild(link);
+      li.appendChild(document.createTextNode(` (${(a.size / 1048576).toFixed(1)} MB)`));
+      list.appendChild(li);
+      if (a.name === "SHA256SUMS") $("sums").href = a.browser_download_url;
+    }
+    let pick = assets.find(a => prefer.includes(a.name));
+    if (isDebian) {
+      const deb = assets.find(a => a.name.endsWith(arch === "arm64" ? "_arm64.deb" : "_amd64.deb"));
+      if (deb) pick = deb;
+    }
+    if (pick) {
+      $("download").href = pick.browser_download_url;
+      $("download").textContent = `Download for ${names[os]}`;
+      $("filemeta").textContent = `${pick.name} · ${(pick.size / 1048576).toFixed(1)} MB · version ${rel.tag_name}`;
+    } else {
+      $("download").textContent = "See all downloads";
+      $("download").href = rel.html_url;
+    }
+  } catch (e) {
+    $("download").textContent = "Go to downloads";
+    $("filemeta").textContent = "Could not reach GitHub to find the latest version automatically.";
+  }
+  if (os !== "unknown") $(`howto-${os}`).classList.remove("hidden"); else $("howto").classList.add("hidden");
+})();
+</script>
+</body>
+</html>

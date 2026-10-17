@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+description = "Developer tasks: brand installers with a manifest, assemble AppDir / .app / .deb layouts"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+installer-core = { path = "../installer-core" }
+anyhow.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+sha2 = "0.11"
+hex = "0.4"

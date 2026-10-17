@@ -1,0 +1,254 @@
+# Builds the installer for every target, packages it the way each OS expects
+# (single .exe / .app-in-.dmg / .AppImage + .deb), publishes a GitHub Release
+# and deploys the auto-detecting download page to GitHub Pages.
+#
+# Branding: set the repository variable OMNISTALL_MANIFEST to a manifest path
+# inside the repo (e.g. manifests/ripgrep.toml) and every produced installer
+# will install that app. Leave it unset for a generic installer that asks for
+# a manifest.
+#
+# Optional signing secrets (all steps are skipped when absent):
+#   Windows: WINDOWS_CERT_PFX_BASE64, WINDOWS_CERT_PASSWORD
+#   macOS:   MACOS_CERT_P12_BASE64, MACOS_CERT_PASSWORD, MACOS_SIGN_IDENTITY,
+#            APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   (notarization)
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+  MANIFEST: ${{ vars.OMNISTALL_MANIFEST }}
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+  linux:
+    needs: version
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-22.04,     target: x86_64-unknown-linux-gnu,  arch: x86_64,  deb: amd64 }
+          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, arch: aarch64, deb: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y libfuse2 file
+      - name: Build
+        run: cargo build --release --locked -p installer-gui --target ${{ matrix.target }}
+      - name: Package AppImage and .deb
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euxo pipefail
+          mkdir -p dist
+          BIN=target/${{ matrix.target }}/release/omnistall
+          MANIFEST_ARG=()
+          if [[ -n "${MANIFEST:-}" ]]; then MANIFEST_ARG=(--manifest "$MANIFEST"); fi
+
+          cargo xtask appdir --binary "$BIN" --out dist/Omnistall.AppDir "${MANIFEST_ARG[@]}"
+          curl -sSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage"
+          chmod +x appimagetool
+          ARCH=${{ matrix.arch }} ./appimagetool --appimage-extract-and-run dist/Omnistall.AppDir "dist/Omnistall-linux-${{ matrix.arch }}.AppImage"
+          rm -rf dist/Omnistall.AppDir
+
+          cargo xtask deb --binary "$BIN" --out "dist/omnistall_${VERSION}_${{ matrix.deb }}.deb" \
+            --version "$VERSION" --arch ${{ matrix.deb }} "${MANIFEST_ARG[@]}"
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+
+  macos:
+    needs: version
+    name: macOS universal
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build both architectures
+        run: |
+          cargo build --release --locked -p installer-gui --target aarch64-apple-darwin
+          cargo build --release --locked -p installer-gui --target x86_64-apple-darwin
+      - name: Assemble universal .app
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euxo pipefail
+          mkdir -p dist
+          lipo -create -output dist/omnistall-universal \
+            target/aarch64-apple-darwin/release/omnistall \
+            target/x86_64-apple-darwin/release/omnistall
+          MANIFEST_ARG=()
+          if [[ -n "${MANIFEST:-}" ]]; then MANIFEST_ARG=(--manifest "$MANIFEST"); fi
+          cargo xtask app-bundle --binary dist/omnistall-universal --out dist/Omnistall.app --version "$VERSION" "${MANIFEST_ARG[@]}"
+          rm dist/omnistall-universal
+      - name: Import signing certificate
+        if: ${{ env.MACOS_CERT != '' }}
+        env:
+          MACOS_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$MACOS_CERT" | base64 --decode > cert.p12
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import cert.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+      - name: Code sign
+        env:
+          IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          set -euxo pipefail
+          if [[ -n "${IDENTITY:-}" ]]; then
+            codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" dist/Omnistall.app
+          else
+            echo "No Developer ID: ad-hoc signing (users must right-click > Open once)."
+            codesign --force --deep --sign - dist/Omnistall.app
+          fi
+          codesign --verify --verbose dist/Omnistall.app
+      - name: Create .dmg
+        run: |
+          set -euxo pipefail
+          rm -rf dmg-root && mkdir dmg-root
+          cp -R dist/Omnistall.app dmg-root/
+          ln -s /Applications dmg-root/Applications
+          hdiutil create -volname "Omnistall" -srcfolder dmg-root -ov -format UDZO dist/Omnistall-macos-universal.dmg
+          rm -rf dist/Omnistall.app dmg-root
+      - name: Notarize and staple
+        if: ${{ env.APPLE_ID != '' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euxo pipefail
+          xcrun notarytool submit dist/Omnistall-macos-universal.dmg \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple dist/Omnistall-macos-universal.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dist/*
+
+  windows:
+    needs: version
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-pc-windows-msvc,  arch: x86_64 }
+          - { target: aarch64-pc-windows-msvc, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked -p installer-gui --target ${{ matrix.target }}
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $out = "dist/OmnistallSetup-windows-${{ matrix.arch }}.exe"
+          $bin = "target/${{ matrix.target }}/release/omnistall.exe"
+          if ($env:MANIFEST) {
+            # Brand (append manifest) BEFORE signing: Authenticode covers the whole file.
+            cargo xtask brand --installer $bin --manifest $env:MANIFEST --out $out
+          } else {
+            Copy-Item $bin $out
+          }
+      - name: Sign
+        if: ${{ env.PFX != '' }}
+        shell: pwsh
+        env:
+          PFX: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:PFX))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          & $signtool.FullName sign /f cert.pfx /p $env:PFX_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist/OmnistallSetup-windows-${{ matrix.arch }}.exe"
+          Remove-Item cert.pfx
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    needs: [version, linux, macos, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+      - uses: actions/upload-artifact@v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        with:
+          name: all-installers
+          path: dist/*
+
+  pages:
+    # One download page that detects the visitor's OS/CPU and serves the right file.
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Point the page at this repository
+        run: |
+          mkdir -p public
+          sed "s#__REPO__#${GITHUB_REPOSITORY}#g" site/index.html > public/index.html
+          cp assets/icon-128.png public/icon.png
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deploy
+        uses: actions/deploy-pages@v4

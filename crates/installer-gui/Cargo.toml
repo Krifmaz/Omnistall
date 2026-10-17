@@ -1,0 +1,30 @@
+[package]
+name = "installer-gui"
+description = "Omnistall graphical installer (Iced)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "omnistall"
+path = "src/main.rs"
+
+[dependencies]
+installer-core = { path = "../installer-core" }
+# wgpu (GPU) first, tiny-skia (CPU) as automatic fallback, see src/main.rs.
+iced = { version = "0.14", default-features = false, features = [
+    "wgpu", "tiny-skia", "crisp", "web-colors", "thread-pool",
+    "linux-theme-detection", "x11", "wayland", "fira-sans", "image", "svg",
+] }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+open = "5"
+dirs = "7"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

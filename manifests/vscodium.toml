@@ -1,0 +1,87 @@
+# Example 2 — graphical application using native formats per OS:
+#   Linux   → tar.gz payload (+ desktop entry, icon, PATH entry for `codium`)
+#   macOS   → .dmg containing VSCodium.app  → ~/Applications
+#   Windows → per-user Inno Setup .exe, run silently
+schema = 1
+
+[app]
+name = "vscodium"
+display_name = "VSCodium"
+version = "1.95.3.24321"
+description = "Free/libre open-source binaries of VS Code, without telemetry."
+publisher = "VSCodium"
+homepage = "https://vscodium.com"
+license = "MIT"
+icon = "https://raw.githubusercontent.com/VSCodium/vscodium/master/icons/stable/codium_cnl.png"
+kind = "gui"
+
+[sources.linux-x86_64]
+type = "github"
+repo = "VSCodium/vscodium"
+tag = "{version}"
+asset = "VSCodium-linux-x64-{version}.tar.gz"
+checksum_asset = "VSCodium-linux-x64-{version}.tar.gz.sha256"
+
+[sources.linux-aarch64]
+type = "github"
+repo = "VSCodium/vscodium"
+tag = "{version}"
+asset = "VSCodium-linux-arm64-{version}.tar.gz"
+checksum_asset = "VSCodium-linux-arm64-{version}.tar.gz.sha256"
+
+[sources.macos-x86_64]
+type = "github"
+repo = "VSCodium/vscodium"
+tag = "{version}"
+asset = "VSCodium.x64.{version}.dmg"
+checksum_asset = "VSCodium.x64.{version}.dmg.sha256"
+
+[sources.macos-aarch64]
+type = "github"
+repo = "VSCodium/vscodium"
+tag = "{version}"
+asset = "VSCodium.arm64.{version}.dmg"
+checksum_asset = "VSCodium.arm64.{version}.dmg.sha256"
+
+[sources.windows-x86_64]
+type = "github"
+repo = "VSCodium/vscodium"
+tag = "{version}"
+asset = "VSCodiumUserSetup-x64-{version}.exe"
+checksum_asset = "VSCodiumUserSetup-x64-{version}.exe.sha256"
+format = "exe"          # treat as a setup program, not a raw binary
+
+[sources.windows-aarch64]
+type = "github"
+repo = "VSCodium/vscodium"
+tag = "{version}"
+asset = "VSCodiumUserSetup-arm64-{version}.exe"
+checksum_asset = "VSCodiumUserSetup-arm64-{version}.exe.sha256"
+format = "exe"
+
+[install]
+# Linux tarball layout: ./codium (GUI) and ./bin/codium (CLI wrapper)
+executable = "codium"
+bin = ["bin/codium"]
+add_to_path = true
+
+[install.macos]
+app_bundle = "VSCodium.app"
+
+[install.windows]
+# Inno Setup flags: silent, no restart, do not launch after install.
+installer_args = ["/VERYSILENT", "/NORESTART", "/MERGETASKS=!runcode,addcontextmenufiles,addtopath"]
+executable = "%LOCALAPPDATA%\\Programs\\VSCodium\\VSCodium.exe"
+uninstall_command = "\"%LOCALAPPDATA%\\Programs\\VSCodium\\unins000.exe\" /VERYSILENT /NORESTART"
+
+[[shortcuts]]
+name = "VSCodium"
+exec = "codium"
+icon = "resources/app/resources/linux/code.png"
+categories = ["Development", "IDE", "TextEditor"]
+comment = "Code editing. Redefined."
+
+[[file_associations]]
+extension = ".code-workspace"
+mime = "application/x-code-workspace"
+description = "VSCodium workspace"

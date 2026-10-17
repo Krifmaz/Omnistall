@@ -1,0 +1,81 @@
+# Example 1 — prebuilt command-line tool from GitHub Releases.
+# ripgrep publishes one archive per target plus a `.sha256` file for each.
+schema = 1
+
+[app]
+name = "ripgrep"
+display_name = "ripgrep"
+version = "14.1.1"
+description = "ripgrep recursively searches directories for a regex pattern. It is extremely fast and respects your .gitignore."
+publisher = "Andrew Gallant (BurntSushi)"
+homepage = "https://github.com/BurntSushi/ripgrep"
+license = "MIT OR Unlicense"
+kind = "cli"
+
+# `tag` defaults to "v{version}"; ripgrep tags without the "v".
+[sources.linux-x86_64]
+type = "github"
+repo = "BurntSushi/ripgrep"
+tag = "{version}"
+asset = "ripgrep-{version}-x86_64-unknown-linux-musl.tar.gz"
+checksum_asset = "ripgrep-{version}-x86_64-unknown-linux-musl.tar.gz.sha256"
+strip_components = 1
+
+[sources.linux-aarch64]
+type = "github"
+repo = "BurntSushi/ripgrep"
+tag = "{version}"
+asset = "ripgrep-{version}-aarch64-unknown-linux-gnu.tar.gz"
+checksum_asset = "ripgrep-{version}-aarch64-unknown-linux-gnu.tar.gz.sha256"
+strip_components = 1
+
+[sources.macos-x86_64]
+type = "github"
+repo = "BurntSushi/ripgrep"
+tag = "{version}"
+asset = "ripgrep-{version}-x86_64-apple-darwin.tar.gz"
+checksum_asset = "ripgrep-{version}-x86_64-apple-darwin.tar.gz.sha256"
+strip_components = 1
+
+[sources.macos-aarch64]
+type = "github"
+repo = "BurntSushi/ripgrep"
+tag = "{version}"
+asset = "ripgrep-{version}-aarch64-apple-darwin.tar.gz"
+checksum_asset = "ripgrep-{version}-aarch64-apple-darwin.tar.gz.sha256"
+strip_components = 1
+
+[sources.windows-x86_64]
+type = "github"
+repo = "BurntSushi/ripgrep"
+tag = "{version}"
+asset = "ripgrep-{version}-x86_64-pc-windows-msvc.zip"
+checksum_asset = "ripgrep-{version}-x86_64-pc-windows-msvc.zip.sha256"
+strip_components = 1
+
+[sources.windows-aarch64]
+type = "github"
+repo = "BurntSushi/ripgrep"
+tag = "{version}"
+asset = "ripgrep-{version}-aarch64-pc-windows-msvc.zip"
+checksum_asset = "ripgrep-{version}-aarch64-pc-windows-msvc.zip.sha256"
+strip_components = 1
+
+# Fallback for anything else (e.g. a future platform): build it.
+[sources.any]
+type = "git"
+url = "https://github.com/BurntSushi/ripgrep.git"
+rev = "{version}"
+
+[build]
+toolchains = [{ name = "rust", version = ">=1.72" }]
+commands = ["cargo build --release --locked"]
+outputs = [{ path = "target/release/rg" }]
+[build.windows]
+outputs = [{ path = "target/release/rg.exe" }]
+
+[install]
+bin = ["rg"]
+add_to_path = true
+[install.windows]
+bin = ["rg.exe"]
