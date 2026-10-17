@@ -160,7 +160,7 @@ fn welcome(app: &App) -> Element<'_, Message> {
     let dir_note = if app.is_cli() {
         format!(
             "Installs for your user only. The `{}` command becomes available in new terminal windows.",
-            a.name
+            app.command_name()
         )
     } else {
         "Installs for your user only. No administrator password needed.".to_string()
@@ -376,11 +376,7 @@ fn finished(app: &App) -> Element<'_, Message> {
 
     if app.action != Action::Uninstall {
         if app.is_cli() {
-            let cmd = app
-                .manifest
-                .as_ref()
-                .map(|m| m.manifest.app.name.clone())
-                .unwrap_or_default();
+            let cmd = app.command_name();
             col = col.push(text(format!("Open a new terminal window and type `{cmd}` to use it. Already-open terminals need to be restarted first.")).size(BODY));
         } else if let Some(inst) = &app.result {
             if let Some(d) = &inst.install_dir {
