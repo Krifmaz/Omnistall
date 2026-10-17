@@ -108,13 +108,29 @@ cargo xtask validate manifests/ripgrep.toml     # check a manifest
 Linux build machines need no extra system libraries: X11/Wayland/xkbcommon
 are loaded at runtime. The resulting binary depends only on glibc.
 
+## One file type for every OS: `.omni`
+
+A `.omni` file is a manifest. Every Omnistall installer registers itself as
+the opener for `.omni` files the first time it runs (per user, no admin), so
+from then on a publisher can ship a single `MyApp.omni` for Windows, macOS
+and Linux: double-click it and the installer opens for that app. Dropping a
+`.omni` file onto an open installer window does the same. The per-OS Setup
+files are still needed once, because no operating system will execute a
+foreign binary format; they are the bootstrap, `.omni` is the everyday path.
+
+(macOS note: the document type is declared in the bundle, so Finder opens
+`.omni` files with Omnistall; if an older copy of the installer is still
+around, macOS may pick that one. Drag-and-drop onto the window always works.)
+
 ## Making an installer for *your* app
 
 1. Write a manifest (see `docs/MANIFEST.md` and the examples in `manifests/`).
+   Save it as `myapp.omni` (or `.toml`; same content).
 2. Give it to the installer in one of three ways:
    * **Brand the binary** (Windows `.exe`, Linux AppImage, any ELF):
-     `cargo xtask brand --installer omnistall.exe --manifest myapp.toml --out MyAppSetup.exe`
-     appends the manifest to the file. Do this *before* code signing.
+     `cargo xtask brand --installer omnistall.exe --manifest myapp.omni --icon myapp.png --out MyAppSetup.exe`
+     appends the manifest to the file and, for a Windows `.exe`, replaces the
+     file icon. Do this *before* code signing.
    * **Sidecar file**: `manifest.toml` next to the executable, inside
      `Omnistall.app/Contents/Resources/`, inside the AppDir, or at
      `/usr/share/omnistall/manifest.toml` for the `.deb`. The `xtask appdir`,
@@ -122,8 +138,9 @@ are loaded at runtime. The resulting binary depends only on glibc.
    * **Environment**: `OMNISTALL_MANIFEST=<path or URL>` (handy for testing).
    If none is present the installer shows a screen asking for a manifest
    path or URL.
-3. In CI, set the repository variable `OMNISTALL_MANIFEST` to the manifest
-   path and tag a release (`git tag v1.0.0 && git push --tags`). The
+3. In CI, set the repository variables `OMNISTALL_MANIFEST` (manifest path)
+   and optionally `OMNISTALL_ICON` (PNG path, replaces the placeholder arrow
+   icon everywhere) and tag a release (`git tag v1.0.0 && git push --tags`). The
    `Release` workflow builds all six targets, packages them, signs them when
    certificates are configured, publishes a GitHub Release with `SHA256SUMS`,
    and deploys the download page to GitHub Pages.
@@ -148,6 +165,7 @@ are loaded at runtime. The resulting binary depends only on glibc.
 | Variable | Effect |
 | --- | --- |
 | `OMNISTALL_MANIFEST` | Path or URL of the manifest to install |
+| `OMNISTALL_NO_REGISTER=1` | Do not register the installer as the `.omni` opener |
 | `OMNISTALL_SOFTWARE_RENDER=1` | Force the tiny-skia software renderer |
 | `OMNISTALL_THEME=light\|dark` | Override system theme detection |
 | `OMNISTALL_LOG=debug` | Log level; logs go to `<data dir>/omnistall/logs/` |

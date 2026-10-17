@@ -1,6 +1,9 @@
 //! Find the manifest a double-clicked installer should install.
 //!
 //! Search order:
+//! 0. A `.omni` / `.toml` document the OS handed us (double-clicked file,
+//!    "Open with…", or dropped on the installer icon): the first argument
+//!    that is an existing file.
 //! 1. `OMNISTALL_MANIFEST` environment variable (path or URL).
 //! 2. A manifest appended to the installer binary by `xtask brand`
 //!    (a TOML blob followed by an 8-byte length and a magic trailer). On Linux
@@ -28,6 +31,14 @@ pub struct Located {
 }
 
 pub fn discover() -> Option<Located> {
+    if let Some(p) = document_argument() {
+        if let Ok(text) = std::fs::read_to_string(&p) {
+            return Some(Located {
+                text,
+                origin: ManifestOrigin::Path(p),
+            });
+        }
+    }
     if let Some(v) = std::env::var_os("OMNISTALL_MANIFEST") {
         let v = v.to_string_lossy().to_string();
         if v.starts_with("http://") || v.starts_with("https://") {
@@ -64,6 +75,15 @@ pub fn discover() -> Option<Located> {
         }
     }
     None
+}
+
+/// A manifest document passed by the OS when the user opened a `.omni` file.
+pub fn document_argument() -> Option<PathBuf> {
+    std::env::args_os()
+        .skip(1)
+        .map(PathBuf::from)
+        .find(|p| crate::selfreg::is_manifest_document(p))
+        .and_then(|p| std::fs::canonicalize(&p).ok().or(Some(p)))
 }
 
 fn self_binaries() -> Vec<PathBuf> {

@@ -64,6 +64,11 @@
     </div>
   </div>
 
+  <div class="card" id="omni-card">
+    <h2>Already have Omnistall?</h2>
+    <p class="meta" style="margin:0">If any Omnistall installer has run on this computer before, you can download the small <code>.omni</code> file instead and double-click it. It works the same on every operating system.</p>
+  </div>
+
   <details class="card">
     <summary>Other downloads</summary>
     <ul id="all"></ul>
@@ -112,7 +117,8 @@
     const rel = await r.json();
     const assets = rel.assets || [];
     const list = $("all");
-    for (const a of assets) {
+    const isInstaller = (n) => /Setup|Omnistall-|\.omni$|^SHA256SUMS$/i.test(n) && !/\.tar\.|\.zip$/i.test(n);
+    for (const a of assets.filter(a => isInstaller(a.name))) {
       const li = document.createElement("li");
       const link = document.createElement("a");
       link.href = a.browser_download_url; link.textContent = a.name;
@@ -120,6 +126,15 @@
       li.appendChild(document.createTextNode(` (${(a.size / 1048576).toFixed(1)} MB)`));
       list.appendChild(li);
       if (a.name === "SHA256SUMS") $("sums").href = a.browser_download_url;
+    }
+    const omni = assets.find(a => a.name.endsWith(".omni"));
+    if (omni) {
+      const p = document.querySelector("#omni-card p");
+      const link = document.createElement("a");
+      link.href = omni.browser_download_url; link.textContent = `Download ${omni.name}`;
+      p.appendChild(document.createTextNode(" ")); p.appendChild(link);
+    } else {
+      $("omni-card").classList.add("hidden");
     }
     let pick = assets.find(a => prefer.includes(a.name));
     if (isDebian) {

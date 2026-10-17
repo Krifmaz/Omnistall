@@ -5,7 +5,7 @@ use crate::style;
 use crate::worker::{self, Action, Event, Failure, Reply};
 use iced::keyboard::{self, Key, key::Named};
 use iced::widget::image;
-use iced::{Element, Size, Subscription, Task, Theme, window};
+use iced::{Element, Event as IcedEvent, Size, Subscription, Task, Theme, event, window};
 use installer_core::progress::Stage;
 use installer_core::{
     CancelToken, Engine, InstallOptions, InstallStatus, InstalledApp, LoadedManifest, ManifestOrigin, Progress,
@@ -99,6 +99,7 @@ pub enum Message {
     CopyDetails,
     ToggleDetails,
     Key(keyboard::Event),
+    FileDropped(std::path::PathBuf),
     Activate(Focusable),
     OpenHomepage,
     Back,
@@ -193,7 +194,13 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        keyboard::listen().map(Message::Key)
+        Subscription::batch([
+            keyboard::listen().map(Message::Key),
+            event::listen_with(|event, _status, _window| match event {
+                IcedEvent::Window(window::Event::FileDropped(path)) => Some(Message::FileDropped(path)),
+                _ => None,
+            }),
+        ])
     }
 
     pub fn app_name(&self) -> String {
@@ -280,13 +287,16 @@ impl App {
         self.focus = 0;
     }
 
-    fn apply_loaded(&mut self, loaded: Loaded) {
+    /// Use the app's own icon for the window / taskbar when it is a raster image.
+    fn apply_loaded(&mut self, loaded: Loaded) -> Task<Message> {
         self.icon = None;
         self.icon_svg = None;
+        let mut window_icon = None;
         if let Some(bytes) = loaded.icon {
             if bytes.starts_with(b"<") || bytes.windows(4).take(256).any(|w| w == b"<svg") {
                 self.icon_svg = Some(iced::widget::svg::Handle::from_memory(bytes));
             } else {
+                window_icon = window::icon::from_file_data(&bytes, None).ok();
                 self.icon = Some(image::Handle::from_bytes(bytes));
             }
         }
@@ -306,6 +316,10 @@ impl App {
         }
         self.status = Some(loaded.status);
         self.set_screen(if installed { Screen::Manage } else { Screen::Welcome });
+        match window_icon {
+            Some(icon) => window::latest().and_then(move |id| window::set_icon(id, icon.clone())),
+            None => Task::none(),
+        }
     }
 
     fn start(&mut self, action: Action) -> Task<Message> {
@@ -408,20 +422,20 @@ impl App {
                 self.engine = Some(boot.engine);
                 match boot.located {
                     Some(loaded) => {
-                        self.apply_loaded(loaded);
+                        let icon_task = self.apply_loaded(loaded);
                         // Test hook: OMNISTALL_AUTO_INSTALL=1 presses Install at once
                         // (used by headless screenshot tests).
                         if self.screen == Screen::Welcome && std::env::var_os("OMNISTALL_AUTO_INSTALL").is_some() {
-                            return self.start(Action::Install);
+                            return Task::batch([icon_task, self.start(Action::Install)]);
                         }
+                        icon_task
                     }
                     None => {
                         self.set_screen(Screen::PickManifest);
                         let _ = boot.needs_pick;
-                        return iced::widget::operation::focus("manifest-input");
+                        iced::widget::operation::focus("manifest-input")
                     }
                 }
-                Task::none()
             }
             Message::Booted(Err(e)) => {
                 self.failure = Some(Failure {
@@ -451,9 +465,19 @@ impl App {
                     |r| Message::ManifestLoaded(r.and_then(|x| x)),
                 )
             }
-            Message::ManifestLoaded(Ok(loaded)) => {
-                self.apply_loaded(loaded);
-                Task::none()
+            Message::ManifestLoaded(Ok(loaded)) => self.apply_loaded(loaded),
+            Message::FileDropped(path) => {
+                // A .omni / .toml dropped on the window: open it (unless busy).
+                if self.screen == Screen::Progress || self.engine.is_none() {
+                    return Task::none();
+                }
+                if !installer_core::selfreg::is_manifest_document(&path) {
+                    self.load_error = Some(format!("{} is not a .omni manifest", path.display()));
+                    self.set_screen(Screen::PickManifest);
+                    return Task::none();
+                }
+                self.manifest_input = path.display().to_string();
+                self.update(Message::LoadManifest)
             }
             Message::ManifestLoaded(Err(e)) => {
                 self.load_error = Some(e);
@@ -675,6 +699,15 @@ fn next_fraction(stage: Stage) -> f32 {
 /// Start-up work: create the engine and find the manifest.
 fn boot_blocking() -> Result<Boot, String> {
     let engine = Arc::new(Engine::new(Scope::User).map_err(|e| e.to_string())?);
+    // Become the opener for .omni files (per-user, best-effort), so that from
+    // now on a double-clicked manifest opens this installer.
+    if std::env::var_os("OMNISTALL_NO_REGISTER").is_none() {
+        if let Some(me) = installer_core::selfreg::self_path() {
+            if let Err(e) = installer_core::selfreg::register(&me) {
+                tracing::warn!("could not register .omni handler: {e}");
+            }
+        }
+    }
     let located = match locator::discover() {
         None => None,
         Some(l) => {

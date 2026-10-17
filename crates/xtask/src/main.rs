@@ -22,6 +22,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Append a manifest to an installer binary so it installs that app.
+    /// With --icon, a Windows .exe also gets that icon as its file icon.
     Brand {
         #[arg(long)]
         installer: PathBuf,
@@ -29,6 +30,9 @@ enum Cmd {
         manifest: PathBuf,
         #[arg(long)]
         out: PathBuf,
+        /// PNG icon (square, ideally 256px or larger).
+        #[arg(long)]
+        icon: Option<PathBuf>,
     },
     /// Validate a manifest and show the selected source for each platform.
     Validate { manifest: PathBuf },
@@ -42,6 +46,9 @@ enum Cmd {
         manifest: Option<PathBuf>,
         #[arg(long, default_value = "Omnistall")]
         name: String,
+        /// PNG icon replacing the default one.
+        #[arg(long)]
+        icon: Option<PathBuf>,
     },
     /// Build a .deb with dpkg-deb.
     Deb {
@@ -56,6 +63,9 @@ enum Cmd {
         arch: String,
         #[arg(long)]
         manifest: Option<PathBuf>,
+        /// PNG icon replacing the default one.
+        #[arg(long)]
+        icon: Option<PathBuf>,
     },
     /// Assemble a macOS .app bundle.
     AppBundle {
@@ -69,6 +79,9 @@ enum Cmd {
         manifest: Option<PathBuf>,
         #[arg(long, default_value = "Omnistall")]
         name: String,
+        /// PNG icon replacing the default one (converted to .icns on macOS).
+        #[arg(long)]
+        icon: Option<PathBuf>,
     },
     /// Write SHA256SUMS for the given files.
     Sha256 {
@@ -86,10 +99,27 @@ fn main() -> Result<()> {
             installer,
             manifest,
             out,
+            icon,
         } => {
             let text = std::fs::read_to_string(&manifest).with_context(|| format!("reading {}", manifest.display()))?;
             installer_core::Manifest::parse(&text).map_err(|e| anyhow::anyhow!("invalid manifest: {e}"))?;
-            installer_core::locator::append_trailer(&installer, &text, &out)?;
+            let mut source = installer.clone();
+            let tmp;
+            if let Some(icon) = &icon {
+                if is_pe(&installer)? {
+                    tmp = out.with_extension("icon.tmp");
+                    set_exe_icon(&installer, icon, &tmp)?;
+                    source = tmp.clone();
+                } else {
+                    eprintln!(
+                        "note: --icon only changes the file icon of Windows executables; use `appdir`/`app-bundle --icon` for Linux/macOS packaging"
+                    );
+                }
+            }
+            installer_core::locator::append_trailer(&source, &text, &out)?;
+            if source != installer {
+                let _ = std::fs::remove_file(&source);
+            }
             println!("wrote {}", out.display());
         }
         Cmd::Validate { manifest } => {
@@ -118,7 +148,9 @@ fn main() -> Result<()> {
             out,
             manifest,
             name,
+            icon,
         } => {
+            let icon_src = icon.unwrap_or_else(|| root.join("assets/icon-256.png"));
             let _ = std::fs::remove_dir_all(&out);
             let bin_dir = out.join("usr").join("bin");
             std::fs::create_dir_all(&bin_dir)?;
@@ -127,8 +159,8 @@ fn main() -> Result<()> {
                 out.join("omnistall.desktop"),
                 desktop_entry(&name, "omnistall", "omnistall"),
             )?;
-            std::fs::copy(root.join("assets/icon-256.png"), out.join("omnistall.png"))?;
-            std::fs::copy(root.join("assets/icon-256.png"), out.join(".DirIcon"))?;
+            write_png(&icon_src, 256, &out.join("omnistall.png"))?;
+            std::fs::copy(out.join("omnistall.png"), out.join(".DirIcon"))?;
             #[cfg(unix)]
             std::os::unix::fs::symlink("usr/bin/omnistall", out.join("AppRun"))?;
             if let Some(m) = manifest {
@@ -142,7 +174,9 @@ fn main() -> Result<()> {
             version,
             arch,
             manifest,
+            icon,
         } => {
+            let icon_src = icon.unwrap_or_else(|| root.join("assets/icon-256.png"));
             let stage = out.with_extension("stage");
             let _ = std::fs::remove_dir_all(&stage);
             let bin_dir = stage.join("usr/bin");
@@ -157,7 +191,7 @@ fn main() -> Result<()> {
                 app_dir.join("omnistall.desktop"),
                 desktop_entry("Omnistall", "omnistall", "omnistall"),
             )?;
-            std::fs::copy(root.join("assets/icon-256.png"), icon_dir.join("omnistall.png"))?;
+            write_png(&icon_src, 256, &icon_dir.join("omnistall.png"))?;
             if let Some(m) = manifest {
                 std::fs::copy(&m, data_dir.join("manifest.toml"))?;
             }
@@ -181,7 +215,9 @@ fn main() -> Result<()> {
             version,
             manifest,
             name,
+            icon,
         } => {
+            let icon_src = icon.unwrap_or_else(|| root.join("assets/icon-256.png"));
             let _ = std::fs::remove_dir_all(&out);
             let contents = out.join("Contents");
             let macos = contents.join("MacOS");
@@ -193,11 +229,11 @@ fn main() -> Result<()> {
                 std::fs::copy(&m, resources.join("manifest.toml"))?;
             }
             // Icon: build an .icns with iconutil when available (macOS), else ship the PNG.
-            let icon_file = match build_icns(&root, &resources) {
+            let icon_file = match build_icns(&icon_src, &resources) {
                 Ok(()) => "AppIcon.icns",
                 Err(e) => {
                     eprintln!("note: iconutil unavailable ({e}); using PNG icon");
-                    std::fs::copy(root.join("assets/icon-256.png"), resources.join("AppIcon.png"))?;
+                    write_png(&icon_src, 512, &resources.join("AppIcon.png"))?;
                     "AppIcon.png"
                 }
             };
@@ -219,6 +255,28 @@ fn main() -> Result<()> {
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>MIT</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Omnistall app manifest</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>dev.omnistall.manifest</string></array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>dev.omnistall.manifest</string>
+      <key>UTTypeDescription</key><string>Omnistall app manifest</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key><array><string>omni</string></array>
+        <key>public.mime-type</key><array><string>application/x-omnistall-manifest</string></array>
+      </dict>
+    </dict>
+  </array>
 </dict>
 </plist>
 "#
@@ -280,7 +338,7 @@ fn dir_size(dir: &Path) -> Result<u64> {
     Ok(total)
 }
 
-fn build_icns(root: &Path, resources: &Path) -> Result<()> {
+fn build_icns(icon: &Path, resources: &Path) -> Result<()> {
     if !cfg!(target_os = "macos") {
         bail!("not macOS");
     }
@@ -292,22 +350,12 @@ fn build_icns(root: &Path, resources: &Path) -> Result<()> {
         (64, vec!["icon_32x32@2x.png"]),
         (128, vec!["icon_128x128.png"]),
         (256, vec!["icon_128x128@2x.png", "icon_256x256.png"]),
+        (512, vec!["icon_256x256@2x.png", "icon_512x512.png"]),
+        (1024, vec!["icon_512x512@2x.png"]),
     ] {
         for n in names {
-            std::fs::copy(root.join(format!("assets/icon-{size}.png")), iconset.join(n))?;
+            write_png(icon, size, &iconset.join(n))?;
         }
-    }
-    // 512 / 1024 variants: upscale the 256 with sips (good enough for an installer).
-    for (n, px) in [
-        ("icon_256x256@2x.png", 512),
-        ("icon_512x512.png", 512),
-        ("icon_512x512@2x.png", 1024),
-    ] {
-        run(Command::new("sips")
-            .args(["-z", &px.to_string(), &px.to_string()])
-            .arg(root.join("assets/icon-256.png"))
-            .arg("--out")
-            .arg(iconset.join(n)))?;
     }
     run(Command::new("iconutil")
         .args(["-c", "icns"])
@@ -315,6 +363,43 @@ fn build_icns(root: &Path, resources: &Path) -> Result<()> {
         .arg("-o")
         .arg(resources.join("AppIcon.icns")))?;
     let _ = std::fs::remove_dir_all(&iconset);
+    Ok(())
+}
+
+/// Load an image (PNG/JPEG/ICO…) and write it as a square PNG of `size` px.
+fn write_png(src: &Path, size: u32, dst: &Path) -> Result<()> {
+    let img = image::open(src).with_context(|| format!("reading icon {}", src.display()))?;
+    let resized = img.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    resized
+        .save_with_format(dst, image::ImageFormat::Png)
+        .with_context(|| format!("writing {}", dst.display()))?;
+    Ok(())
+}
+
+fn is_pe(path: &Path) -> Result<bool> {
+    let mut head = [0u8; 2];
+    use std::io::Read;
+    std::fs::File::open(path)?.read_exact(&mut head)?;
+    Ok(&head == b"MZ")
+}
+
+/// Replace the main icon resource of a Windows executable (pure Rust, runs on any OS).
+fn set_exe_icon(exe: &Path, icon: &Path, out: &Path) -> Result<()> {
+    let mut image = editpe::Image::parse_file(exe).map_err(|e| anyhow::anyhow!("parsing {}: {e}", exe.display()))?;
+    let mut resources = image.resource_directory().cloned().unwrap_or_default();
+    let img = image::open(icon).with_context(|| format!("reading icon {}", icon.display()))?;
+    resources
+        .set_main_icon(img)
+        .map_err(|e| anyhow::anyhow!("setting icon: {e}"))?;
+    image
+        .set_resource_directory(resources)
+        .map_err(|e| anyhow::anyhow!("updating resources: {e}"))?;
+    image
+        .write_file(out)
+        .map_err(|e| anyhow::anyhow!("writing {}: {e}", out.display()))?;
     Ok(())
 }
 

@@ -4,8 +4,10 @@
 #
 # Branding: set the repository variable OMNISTALL_MANIFEST to a manifest path
 # inside the repo (e.g. manifests/ripgrep.toml) and every produced installer
-# will install that app. Leave it unset for a generic installer that asks for
-# a manifest.
+# will install that app; the manifest is also published as `<app>.omni` so
+# people who already have Omnistall can double-click that instead. Set
+# OMNISTALL_ICON to a PNG path to replace the installer icon everywhere.
+# Leave both unset for a generic installer that asks for a manifest.
 #
 # Optional signing secrets (all steps are skipped when absent):
 #   Windows: WINDOWS_CERT_PFX_BASE64, WINDOWS_CERT_PASSWORD
@@ -27,6 +29,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   MANIFEST: ${{ vars.OMNISTALL_MANIFEST }}
+  ICON: ${{ vars.OMNISTALL_ICON }}
 
 jobs:
   version:
@@ -71,6 +74,7 @@ jobs:
           BIN=target/${{ matrix.target }}/release/omnistall
           MANIFEST_ARG=()
           if [[ -n "${MANIFEST:-}" ]]; then MANIFEST_ARG=(--manifest "$MANIFEST"); fi
+          if [[ -n "${ICON:-}" ]]; then MANIFEST_ARG+=(--icon "$ICON"); fi
 
           cargo xtask appdir --binary "$BIN" --out dist/Omnistall.AppDir "${MANIFEST_ARG[@]}"
           curl -sSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage"
@@ -80,6 +84,9 @@ jobs:
 
           cargo xtask deb --binary "$BIN" --out "dist/omnistall_${VERSION}_${{ matrix.deb }}.deb" \
             --version "$VERSION" --arch ${{ matrix.deb }} "${MANIFEST_ARG[@]}"
+          if [[ -n "${MANIFEST:-}" && "${{ matrix.arch }}" == "x86_64" ]]; then
+            cp "$MANIFEST" "dist/$(basename "${MANIFEST%.*}").omni"
+          fi
           ls -la dist
       - uses: actions/upload-artifact@v4
         with:
@@ -111,6 +118,7 @@ jobs:
             target/x86_64-apple-darwin/release/omnistall
           MANIFEST_ARG=()
           if [[ -n "${MANIFEST:-}" ]]; then MANIFEST_ARG=(--manifest "$MANIFEST"); fi
+          if [[ -n "${ICON:-}" ]]; then MANIFEST_ARG+=(--icon "$ICON"); fi
           cargo xtask app-bundle --binary dist/omnistall-universal --out dist/Omnistall.app --version "$VERSION" "${MANIFEST_ARG[@]}"
           rm dist/omnistall-universal
       - name: Import signing certificate
@@ -187,8 +195,10 @@ jobs:
           $out = "dist/OmnistallSetup-windows-${{ matrix.arch }}.exe"
           $bin = "target/${{ matrix.target }}/release/omnistall.exe"
           if ($env:MANIFEST) {
-            # Brand (append manifest) BEFORE signing: Authenticode covers the whole file.
-            cargo xtask brand --installer $bin --manifest $env:MANIFEST --out $out
+            # Brand (icon + appended manifest) BEFORE signing: Authenticode covers the whole file.
+            $iconArgs = @()
+            if ($env:ICON) { $iconArgs = @("--icon", $env:ICON) }
+            cargo xtask brand --installer $bin --manifest $env:MANIFEST --out $out @iconArgs
           } else {
             Copy-Item $bin $out
           }

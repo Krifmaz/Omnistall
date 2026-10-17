@@ -316,3 +316,30 @@ fn dependency_is_installed_first() {
         )
         .unwrap();
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn registers_omni_handler() {
+    let (home, _serial) = isolated_home();
+    let exe = home.join("fake-omnistall");
+    std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+    assert!(installer_core::selfreg::register(&exe).unwrap());
+    let desktop = std::fs::read_to_string(home.join(".local/share/applications/omnistall.desktop")).unwrap();
+    assert!(
+        desktop.contains("MimeType=application/x-omnistall-manifest;"),
+        "{desktop}"
+    );
+    assert!(desktop.contains(&format!("Exec=\"{}\" %f", exe.display())));
+    let xml = std::fs::read_to_string(home.join(".local/share/mime/packages/omnistall.xml")).unwrap();
+    assert!(xml.contains("*.omni"));
+    // Second run is a no-op.
+    assert!(!installer_core::selfreg::register(&exe).unwrap());
+
+    let doc = home.join("thing.omni");
+    std::fs::write(&doc, "x").unwrap();
+    assert!(installer_core::selfreg::is_manifest_document(&doc));
+    assert!(!installer_core::selfreg::is_manifest_document(
+        &home.join("missing.omni")
+    ));
+    assert!(!installer_core::selfreg::is_manifest_document(&exe));
+}

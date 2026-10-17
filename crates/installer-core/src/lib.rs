@@ -6,6 +6,7 @@
 //! Module map:
 //! * [`manifest`]  – TOML schema, loading, validation, platform source selection.
 //! * [`locator`]   – finds the manifest a double-clicked installer should use.
+//! * [`selfreg`]   – registers the installer as the opener for `.omni` files.
 //! * [`platform`]  – OS/CPU detection, elevation check.
 //! * [`paths`]     – per-OS install locations (user vs. system scope).
 //! * [`fetch`]     – HTTP downloads, GitHub Releases, git clone.
@@ -37,6 +38,7 @@ pub mod platform;
 pub mod process;
 pub mod progress;
 pub mod registry;
+pub mod selfreg;
 pub mod source_build;
 pub mod toolchain;
 

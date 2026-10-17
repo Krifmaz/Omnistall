@@ -115,8 +115,8 @@ fn loading<'a>() -> Element<'a, Message> {
 fn pick_manifest(app: &App) -> Element<'_, Message> {
     let mut col = column![
         text("Which app should be installed?").size(HEADING),
-        text("This installer was not bundled with an app description. Enter the location of a manifest file (.toml): a path on this computer or a web address.").size(BODY),
-        text_input("https://example.com/myapp.toml  or  C:\\path\\myapp.toml", &app.manifest_input)
+        text("This installer was not bundled with an app. Drop a .omni file onto this window, or enter the location of one: a path on this computer or a web address.").size(BODY),
+        text_input("https://example.com/myapp.omni  or  C:\\Downloads\\myapp.omni", &app.manifest_input)
             .id("manifest-input")
             .size(BODY)
             .padding(12)

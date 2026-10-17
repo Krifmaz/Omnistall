@@ -1,8 +1,9 @@
 # Manifest reference (schema 1)
 
 A manifest is a TOML file that tells Omnistall how to obtain, verify, install
-and integrate one application. Validate one with
-`cargo xtask validate path/to/app.toml`.
+and integrate one application. Use the `.omni` extension when you distribute
+it (double-clickable once Omnistall is on the machine); `.toml` works too.
+Validate one with `cargo xtask validate path/to/app.omni`.
 
 Placeholders expanded in URLs, tags, asset names, commands and paths:
 `{version}`, `{name}`, `{os}` (`linux|macos|windows`), `{arch}`
