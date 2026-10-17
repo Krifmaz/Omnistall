@@ -213,10 +213,32 @@ impl Fetcher {
 
 #[cfg(feature = "net")]
 fn download_err(url: &str, e: impl std::fmt::Display) -> InstallError {
+    let reason = e.to_string();
+    if url.contains("api.github.com") && (reason.contains("403") || reason.contains("429")) {
+        return InstallError::RateLimited {
+            service: "GitHub".into(),
+            detail: format!("{url}: {reason}"),
+        };
+    }
     InstallError::Download {
         url: url.to_string(),
-        reason: e.to_string(),
+        reason,
     }
+}
+
+/// Direct, API-free URL of a release asset. Works for public repositories
+/// and is not subject to the API rate limit.
+pub fn github_direct_url(repo: &str, tag: &str, asset: &str) -> String {
+    if tag == "latest" {
+        format!("https://github.com/{repo}/releases/latest/download/{asset}")
+    } else {
+        format!("https://github.com/{repo}/releases/download/{tag}/{asset}")
+    }
+}
+
+/// Does an asset pattern need the API to be resolved (wildcards)?
+pub fn needs_api(pattern: &str) -> bool {
+    pattern.contains(['*', '?'])
 }
 
 /// `file:///x/y`, `C:\x`, `/x/y`, `./x` → local path.
@@ -371,6 +393,20 @@ mod tests {
         ));
         assert!(wildcard_match("exact.zip", "exact.zip"));
         assert!(wildcard_match("a?c", "abc"));
+    }
+
+    #[test]
+    fn direct_urls() {
+        assert_eq!(
+            github_direct_url("Krifmaz/Cadenza", "v3.0.2", "Cadenza-Desktop-3.0.2-windows-x86_64.zip"),
+            "https://github.com/Krifmaz/Cadenza/releases/download/v3.0.2/Cadenza-Desktop-3.0.2-windows-x86_64.zip"
+        );
+        assert_eq!(
+            github_direct_url("o/r", "latest", "a.zip"),
+            "https://github.com/o/r/releases/latest/download/a.zip"
+        );
+        assert!(needs_api("app-*-linux.tar.gz"));
+        assert!(!needs_api("app-1.0-linux.tar.gz"));
     }
 
     #[test]

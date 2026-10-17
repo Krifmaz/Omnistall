@@ -22,6 +22,9 @@ pub enum InstallError {
     #[error("download failed for {url}: {reason}")]
     Download { url: String, reason: String },
 
+    #[error("{service} is rate-limiting requests from this network ({detail})")]
+    RateLimited { service: String, detail: String },
+
     #[error("manifest error: {0}")]
     Manifest(String),
 
@@ -48,6 +51,9 @@ pub enum InstallError {
 
     #[error("native installer failed (exit {code:?}): {command}")]
     NativeInstaller { command: String, code: Option<i32> },
+
+    #[error("{path} is in use and could not be replaced: {detail}")]
+    InUse { path: PathBuf, detail: String },
 
     #[error("this operation needs administrator rights")]
     NeedsElevation,
@@ -96,6 +102,9 @@ impl InstallError {
             Self::Download { .. } => {
                 "The download could not be completed. Check your internet connection and try again.".into()
             }
+            Self::RateLimited { service, .. } => format!(
+                "{service} is temporarily limiting requests from your network, so the installer could not look up the download. This usually clears within an hour. Please try again later."
+            ),
             Self::Manifest(_) | Self::ManifestLoad { .. } => {
                 "The installer could not read the app description it was given. The download page or file may be out of date.".into()
             }
@@ -109,6 +118,9 @@ impl InstallError {
             Self::Build { .. } => "Building the app from its source code failed.".into(),
             Self::Hook { .. } => "A setup step provided by the app publisher failed.".into(),
             Self::NativeInstaller { .. } => "The app's own installer reported an error.".into(),
+            Self::InUse { .. } => {
+                "The previous version is still in use, so its files could not be replaced. Close the app (and any Explorer or Finder window showing its folder), then try again.".into()
+            }
             Self::NeedsElevation => {
                 "This step needs administrator rights. Try the default per-user installation instead.".into()
             }
@@ -116,6 +128,9 @@ impl InstallError {
             Self::Cancelled => "The installation was cancelled.".into(),
             Self::Declined(_) => "The installation was stopped because a required step was declined.".into(),
             Self::DependencyCycle(_) => "The app's dependencies reference each other in a loop.".into(),
+            Self::Io { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied => {
+                "A file could not be replaced because it is in use or protected. If the app is open, close it and try again.".into()
+            }
             Self::Io { .. } => {
                 "A file could not be read or written. Make sure you have enough disk space and permission to write to the install location.".into()
             }

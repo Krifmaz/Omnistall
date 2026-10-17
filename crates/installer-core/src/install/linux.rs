@@ -208,6 +208,14 @@ pub fn install_native(
     }
 }
 
+/// Processes running from `dir`. On Unix an open executable does not block
+/// replacement, so nothing is reported.
+pub fn processes_in(_dir: &Path) -> Vec<(u32, String)> {
+    Vec::new()
+}
+
+pub fn terminate(_procs: &[(u32, String)], _frontend: &dyn Frontend) {}
+
 pub fn uninstall_native(app: &InstalledApp, frontend: &dyn Frontend, cancel: &CancelToken) -> Result<()> {
     match app.method {
         InstallMethod::DebDpkg => {

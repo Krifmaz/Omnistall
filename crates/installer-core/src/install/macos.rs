@@ -266,6 +266,14 @@ fn shell_escape_applescript(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''")).replace('"', "\\\"")
 }
 
+/// Processes running from `dir`. On Unix an open executable does not block
+/// replacement, so nothing is reported.
+pub fn processes_in(_dir: &Path) -> Vec<(u32, String)> {
+    Vec::new()
+}
+
+pub fn terminate(_procs: &[(u32, String)], _frontend: &dyn Frontend) {}
+
 pub fn uninstall_native(app: &InstalledApp, frontend: &dyn Frontend, cancel: &CancelToken) -> Result<()> {
     if let (InstallMethod::Pkg, Some(cmd)) = (app.method, &app.native_uninstall) {
         let st = process::run_logged(&mut process::shell(cmd), frontend, cancel)?;

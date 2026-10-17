@@ -299,6 +299,30 @@ pub fn install_native(
     }
 }
 
+/// Processes whose executable lives under `dir`: `(pid, name)`.
+pub fn processes_in(dir: &Path) -> Vec<(u32, String)> {
+    let prefix = dir.display().to_string().trim_end_matches('\\').to_string();
+    let script = format!(
+        "Get-Process | Where-Object {{ $_.Path -and $_.Path.StartsWith({}, [System.StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ \"$($_.Id)|$($_.ProcessName)\" }}",
+        ps_quote(&format!("{prefix}\\"))
+    );
+    let Ok(out) = ps(&script).output() else { return vec![] };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let (pid, name) = l.trim().split_once('|')?;
+            Some((pid.parse().ok()?, name.to_string()))
+        })
+        .collect()
+}
+
+pub fn terminate(procs: &[(u32, String)], frontend: &dyn Frontend) {
+    for (pid, name) in procs {
+        frontend.log(format!("closing {name} (pid {pid})"));
+        let _ = ps(&format!("Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue")).output();
+    }
+}
+
 pub fn uninstall_native(app: &InstalledApp, frontend: &dyn Frontend, cancel: &CancelToken) -> Result<()> {
     match app.method {
         InstallMethod::Msi => {

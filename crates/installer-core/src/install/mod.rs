@@ -518,6 +518,7 @@ impl Engine {
             }
         }
         if payload_placed {
+            self.clear_install_dir(&install_dir, manifest.app.display_name(), frontend, cancel)?;
             crate::fsutil::replace_dir(&staging, &install_dir)?;
             final_install_dir = Some(install_dir.clone());
             for f in &spec.files {
@@ -778,6 +779,36 @@ impl Engine {
                     .map(|t| manifest.expand(t, platform))
                     .unwrap_or_else(|| format!("v{}", manifest.app.version));
                 let pattern = manifest.expand(asset, platform);
+                let cs_pattern = checksum_asset.as_ref().map(|c| manifest.expand(c, platform));
+
+                // Exact names: use the API-free download URL (no rate limit).
+                if !crate::fetch::needs_api(&pattern) {
+                    let url = crate::fetch::github_direct_url(repo, &tag, &pattern);
+                    frontend.log(format!("release asset {repo}@{tag}/{pattern}"));
+                    let mut sha = source.sha256.clone();
+                    if sha.is_none() {
+                        if let Some(cs) = &cs_pattern {
+                            if crate::fetch::needs_api(cs) {
+                                frontend.warn(format!(
+                                    "checksum asset pattern {cs:?} has wildcards; skipping checksum"
+                                ));
+                            } else {
+                                let cs_url = crate::fetch::github_direct_url(repo, &tag, cs);
+                                match self.fetcher.get_text(&cs_url) {
+                                    Ok(text) => {
+                                        sha = crate::checksum::find_in_sums(&text, &pattern);
+                                        if sha.is_none() {
+                                            frontend.warn(format!("{cs} does not list {pattern}"));
+                                        }
+                                    }
+                                    Err(e) => frontend.warn(format!("checksum file unavailable: {e}")),
+                                }
+                            }
+                        }
+                    }
+                    return Ok((url, pattern, sha));
+                }
+
                 frontend.log(format!("looking up {repo} release {tag} asset {pattern}"));
                 let assets = self.fetcher.github_release_assets(repo, &tag)?;
                 let matched: Vec<_> = assets
@@ -807,11 +838,10 @@ impl Engine {
                 };
                 let mut sha = source.sha256.clone();
                 if sha.is_none() {
-                    if let Some(cs) = checksum_asset {
-                        let cs_pattern = manifest.expand(cs, platform);
+                    if let Some(cs_pattern) = &cs_pattern {
                         if let Some(cs_asset) = assets
                             .iter()
-                            .find(|a| crate::fetch::wildcard_match(&cs_pattern, &a.name))
+                            .find(|a| crate::fetch::wildcard_match(cs_pattern, &a.name))
                         {
                             let text = self.fetcher.get_text(&cs_asset.browser_download_url)?;
                             sha = crate::checksum::find_in_sums(&text, &asset.name);
@@ -941,6 +971,79 @@ impl Engine {
         }
     }
 
+    /// Make `dir` removable before an update/repair replaces it.
+    ///
+    /// On Windows, files of a running program are locked, so the previous
+    /// version must be closed first. We detect processes running from the
+    /// directory, ask the user to close them (or close them for the user),
+    /// and as a last resort rename the old directory aside so the new files
+    /// can be put in place; the renamed leftovers are cleaned up on the next
+    /// run.
+    fn clear_install_dir(
+        &self,
+        dir: &Path,
+        display_name: &str,
+        frontend: &dyn Frontend,
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        cleanup_old_dirs(dir);
+        if !dir.exists() {
+            return Ok(());
+        }
+        for attempt in 0..3 {
+            cancel.check()?;
+            let running = os::processes_in(dir);
+            if !running.is_empty() {
+                let names: Vec<String> = running.iter().map(|(_, n)| n.clone()).collect();
+                let q = crate::progress::Question {
+                    title: format!("{display_name} is still running"),
+                    body: format!(
+                        "{display_name} must be closed before it can be updated.\n\nRunning: {}\n\nClose it now and continue?",
+                        names.join(", ")
+                    ),
+                    accept_label: format!("Close {display_name} and continue"),
+                    decline_label: "Cancel".into(),
+                };
+                if !frontend.confirm(&q) {
+                    return Err(InstallError::Declined("closing the running application".into()));
+                }
+                os::terminate(&running, frontend);
+                std::thread::sleep(std::time::Duration::from_millis(800));
+            }
+            match crate::fsutil::remove_path(dir) {
+                Ok(()) => return Ok(()),
+                Err(e) if attempt < 2 => {
+                    frontend.warn(format!("could not remove the previous version yet ({e}); retrying"));
+                    std::thread::sleep(std::time::Duration::from_millis(700));
+                }
+                Err(e) => {
+                    // Last resort: move the old directory aside.
+                    let aside = dir.with_file_name(format!(
+                        "{}.old-{}",
+                        dir.file_name().unwrap_or_default().to_string_lossy(),
+                        chrono::Utc::now().format("%Y%m%d%H%M%S")
+                    ));
+                    match std::fs::rename(dir, &aside) {
+                        Ok(()) => {
+                            frontend.warn(format!(
+                                "the previous version is still in use; it was moved to {} and will be removed next time",
+                                aside.display()
+                            ));
+                            return Ok(());
+                        }
+                        Err(_) => {
+                            return Err(InstallError::InUse {
+                                path: dir.to_path_buf(),
+                                detail: e.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Remove shortcuts, PATH entries, symlinks and associations.
     /// PATH entries shared with other installed apps are kept.
     fn remove_integration(&self, app: &InstalledApp, registry: &Registry, frontend: &dyn Frontend) -> Result<()> {
@@ -1007,7 +1110,7 @@ impl Engine {
         match app.method {
             InstallMethod::Payload | InstallMethod::Source | InstallMethod::AppImage => {
                 if let Some(dir) = &app.install_dir {
-                    crate::fsutil::remove_path(dir)?;
+                    self.clear_install_dir(dir, &app.display_name, frontend, cancel)?;
                 }
             }
             InstallMethod::AppBundle => {
@@ -1038,6 +1141,21 @@ impl Engine {
         registry.save()?;
         frontend.stage(Stage::Done, &app.display_name);
         Ok(())
+    }
+}
+
+/// Delete `<dir>.old-*` leftovers from earlier updates (best-effort).
+fn cleanup_old_dirs(dir: &Path) {
+    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.old-", name.to_string_lossy());
+    if let Ok(entries) = std::fs::read_dir(parent) {
+        for e in entries.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
     }
 }
 
