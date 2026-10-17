@@ -203,6 +203,30 @@ impl App {
             .unwrap_or_else(|| "this app".to_string())
     }
 
+    /// The command a CLI user will type: the first `bin` entry's file name
+    /// for this OS, falling back to the app name.
+    pub fn command_name(&self) -> String {
+        let Some(m) = &self.manifest else {
+            return "the command".into();
+        };
+        let os = self
+            .engine
+            .as_ref()
+            .map(|e| e.platform.os)
+            .unwrap_or(installer_core::Os::Linux);
+        m.manifest
+            .install
+            .for_os(os)
+            .bin
+            .first()
+            .and_then(|b| {
+                std::path::Path::new(b)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+            })
+            .unwrap_or_else(|| m.manifest.app.name.clone())
+    }
+
     pub fn is_cli(&self) -> bool {
         self.manifest
             .as_ref()
